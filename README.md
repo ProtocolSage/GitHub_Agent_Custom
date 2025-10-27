@@ -150,6 +150,35 @@ gh-assist ask "What's the difference between merge and rebase?"
 gh-assist ask "How to undo last commit?"
 ```
 
+### Batch Operations
+
+#### Quick commit (stage + commit + push in one command)
+```bash
+gh-assist quick-commit             # Stage all, AI commit
+gh-assist qc --push               # Commit and push (alias: qc)
+gh-assist qc -m "fix: bug" --push # Custom message and push
+```
+
+#### Sync with remote (pull + push)
+```bash
+gh-assist sync                    # Pull and push
+gh-assist sy --rebase             # Sync with rebase (alias: sy)
+```
+
+#### Check rate limit status
+```bash
+gh-assist rate-limit              # View GitHub API limits
+```
+
+### Debug Mode
+
+Enable debug logging for troubleshooting:
+
+```bash
+gh-assist --debug status          # Debug mode for single command
+GH_ASSIST_DEBUG=true gh-assist status  # Via environment variable
+```
+
 ## 🔥 Workflow Examples
 
 ### Daily Commit Workflow
@@ -254,12 +283,44 @@ gh-assist ask "When should I use rebase vs merge?"
 
 ## 🛠️ Configuration
 
-Your credentials are stored in [.env](.env):
+### Environment Variables
+
+Your credentials are stored in `.env`:
 
 ```env
 # Required
 GITHUB_TOKEN=your_github_personal_access_token_here
+# Required scopes: repo, workflow, read:org, read:user
+
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# Optional: Override default AI model
+# ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+
+# Optional: Enable debug logging
+# GH_ASSIST_DEBUG=true
+```
+
+### Configuration File (Optional)
+
+Create `.gh-assistant.yml` in your project or home directory:
+
+```yaml
+ai:
+  model: claude-3-5-sonnet-20241022
+  max_diff_size: 50000
+  max_pr_diff_size: 100000
+
+git:
+  default_branch: main
+  auto_stage: false
+
+github:
+  default_private: false
+  auto_init: true
+
+cli:
+  debug: false
 ```
 
 ## 📋 Requirements
@@ -276,13 +337,50 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 - Use repository-scoped tokens when possible
 - Regularly rotate your API keys
 
-## 🤝 Tips
+## 🤝 Tips & Best Practices
 
 1. **Use AI commit messages**: They're often better than hastily written ones
-2. **Review before committing**: Catch issues early
+2. **Review before committing**: Catch issues early with `gh-assist review`
 3. **AI PR reviews**: Get instant feedback on pull requests
 4. **Ask questions**: The AI is great for learning Git/GitHub concepts
 5. **Combine commands**: Use `--ai` flags for intelligent automation
+6. **Use batch commands**: `quick-commit` and `sync` save time
+7. **Monitor rate limits**: Check with `gh-assist rate-limit` if hitting API limits
+8. **Debug mode**: Use `--debug` flag to troubleshoot issues
+9. **Config files**: Set defaults in `.gh-assistant.yml` for your workflow
+10. **Command aliases**: Use shorter versions (`qc`, `sy`) for faster typing
+
+## ⚙️ Advanced Features
+
+### Diff Size Limits
+
+To prevent excessive API costs, diffs are automatically truncated:
+- Regular diffs: 50,000 characters max
+- PR diffs: 100,000 characters max
+
+Configure in `.gh-assistant.yml` or code.
+
+### Input Validation
+
+Branch and tag names are automatically validated to prevent invalid git references:
+- No special characters (`[]^~:?*\`)
+- No double dots (`..`)
+- No leading/trailing dots or slashes
+- No whitespace
+
+### Rate Limit Handling
+
+The assistant automatically handles GitHub API rate limits:
+- Waits for rate limit reset
+- Retries up to 3 times
+- Shows remaining requests with `rate-limit` command
+
+### Command Aliases
+
+Shorter command names for frequently used operations:
+- `commit` → `ci`
+- `quick-commit` → `qc`
+- `sync` → `sy`
 
 ## 📝 License
 

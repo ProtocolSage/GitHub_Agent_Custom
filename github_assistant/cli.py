@@ -2,6 +2,7 @@
 
 import sys
 import os
+import logging
 
 # Fix Windows encoding issues
 if sys.platform == 'win32':
@@ -15,6 +16,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.markdown import Markdown
+from rich.logging import RichHandler
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -25,26 +27,49 @@ from github_assistant.core.github_client import GitHubClient
 from github_assistant.core.ai_agent import AIAgent
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(debug: bool = False):
+    """Configure logging based on debug flag."""
+    level = logging.DEBUG if debug else logging.WARNING
+
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        handlers=[RichHandler(console=console, show_time=False, show_path=debug)]
+    )
+
+    if debug:
+        console.print("[dim]Debug mode enabled[/dim]")
 
 
 def get_clients():
     """Initialize and return Git, GitHub, and AI clients."""
     try:
+        logger.debug("Initializing clients...")
         git_client = GitClient()
         github_client = GitHubClient()
         ai_agent = AIAgent()
+        logger.debug("Clients initialized successfully")
         return git_client, github_client, ai_agent
     except Exception as e:
+        logger.exception("Failed to initialize clients")
         console.print(f"[red]Error initializing clients: {str(e)}[/red]")
         console.print("\n[yellow]Make sure .env file has GITHUB_TOKEN and ANTHROPIC_API_KEY[/yellow]")
+        console.print("[yellow]Required GitHub token scopes: repo, workflow, read:org, read:user[/yellow]")
         sys.exit(1)
 
 
 @click.group()
+@click.option('--debug', is_flag=True, help='Enable debug logging', envvar='GH_ASSIST_DEBUG')
 @click.version_option(version='1.0.0')
-def cli():
+@click.pass_context
+def cli(ctx, debug):
     """GitHub Assistant - Your AI-powered Git and GitHub automation tool."""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj['DEBUG'] = debug
+    setup_logging(debug)
 
 
 # ============================================================================
@@ -542,6 +567,125 @@ def ask(question):
 
         console.print("\n[bold cyan]AI Assistant:[/bold cyan]")
         console.print(Panel(Markdown(answer), border_style="cyan"))
+
+    except Exception as e:
+        console.print(f"[red]ERROR Error: {str(e)}[/red]")
+        sys.exit(1)
+
+
+# ============================================================================
+# BATCH OPERATIONS
+# ============================================================================
+
+@cli.command(name='quick-commit', aliases=['qc'])
+@click.option('--ai', is_flag=True, default=True, help='Generate commit message with AI')
+@click.option('--message', '-m', help='Commit message (skips AI)')
+@click.option('--push', '-p', is_flag=True, help='Push after committing')
+@click.option('--remote', '-r', default='origin', help='Remote to push to')
+def quick_commit(ai, message, push, remote):
+    """Quick commit: stage all changes, commit (with AI), and optionally push."""
+    git, _, agent = get_clients()
+
+    try:
+        # Stage all changes
+        git.add(all=True)
+        console.print("[green]OK[/green] Staged all changes")
+
+        # Get diff
+        diff = git.get_diff(staged=True)
+        if not diff:
+            console.print("[yellow]No staged changes to commit.[/yellow]")
+            return
+
+        # Generate or use provided message
+        if ai and not message:
+            console.print("[cyan]AI: Generating commit message...[/cyan]")
+            message = agent.generate_commit_message(diff)
+            console.print("\n[bold]Generated message:[/bold]")
+            console.print(Panel(message, border_style="cyan"))
+
+            if not click.confirm("\nUse this message?", default=True):
+                message = click.prompt("Enter commit message")
+
+        if not message:
+            message = click.prompt("Enter commit message")
+
+        # Commit
+        commit_sha = git.commit(message)
+        console.print(f"\n[green]OK Committed: {commit_sha}[/green]")
+        console.print(f"  {message.split(chr(10))[0]}")
+
+        # Push if requested
+        if push:
+            with console.status("[cyan]Pushing changes...[/cyan]"):
+                result = git.push(remote=remote)
+            console.print(f"[green]OK {result}[/green]")
+
+    except Exception as e:
+        console.print(f"[red]ERROR Error: {str(e)}[/red]")
+        sys.exit(1)
+
+
+@cli.command(name='sync', aliases=['sy'])
+@click.option('--remote', '-r', default='origin', help='Remote name')
+@click.option('--branch', '-b', help='Branch name')
+@click.option('--rebase', is_flag=True, help='Use rebase instead of merge')
+def sync(remote, branch, rebase):
+    """Sync with remote: pull changes and push local commits."""
+    git, _, _ = get_clients()
+
+    try:
+        # Pull first
+        with console.status("[cyan]Pulling changes...[/cyan]"):
+            pull_result = git.pull(remote=remote, branch=branch, rebase=rebase)
+        console.print(f"[green]OK {pull_result}[/green]")
+
+        # Check if there are local commits to push
+        status_info = git.status()
+        if status_info['is_dirty']:
+            console.print("[yellow]Working directory has uncommitted changes.[/yellow]")
+            console.print("[yellow]Commit changes before syncing.[/yellow]")
+            return
+
+        # Push
+        with console.status("[cyan]Pushing changes...[/cyan]"):
+            push_result = git.push(remote=remote, branch=branch)
+        console.print(f"[green]OK {push_result}[/green]")
+
+        console.print("\n[green]✓[/green] Sync complete!")
+
+    except Exception as e:
+        console.print(f"[red]ERROR Error: {str(e)}[/red]")
+        sys.exit(1)
+
+
+@cli.command(name='rate-limit')
+def rate_limit():
+    """Check GitHub API rate limit status."""
+    _, github, _ = get_clients()
+
+    try:
+        status = github.get_rate_limit_status()
+
+        table = Table(title="GitHub API Rate Limits", show_header=True, header_style="bold cyan")
+        table.add_column("Resource", style="yellow")
+        table.add_column("Limit", justify="right")
+        table.add_column("Remaining", justify="right", style="green")
+        table.add_column("Reset Time", style="cyan")
+
+        for resource, data in status.items():
+            remaining_style = "green" if data['remaining'] > data['limit'] * 0.2 else "yellow"
+            if data['remaining'] < data['limit'] * 0.1:
+                remaining_style = "red"
+
+            table.add_row(
+                resource.title(),
+                str(data['limit']),
+                f"[{remaining_style}]{data['remaining']}[/{remaining_style}]",
+                data['reset']
+            )
+
+        console.print(table)
 
     except Exception as e:
         console.print(f"[red]ERROR Error: {str(e)}[/red]")

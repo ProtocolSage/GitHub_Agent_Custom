@@ -4,6 +4,10 @@ from typing import List, Optional, Dict
 from pathlib import Path
 import git
 from git import Repo, GitCommandError, InvalidGitRepositoryError
+import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GitClient:
@@ -16,6 +20,42 @@ class GitClient:
             self.repo = Repo(self.repo_path)
         except InvalidGitRepositoryError:
             self.repo = None
+
+    @staticmethod
+    def _validate_ref_name(name: str, ref_type: str = "ref") -> None:
+        """
+        Validate git ref names (branches, tags).
+
+        Raises:
+            ValueError: If ref name is invalid
+        """
+        if not name or not name.strip():
+            raise ValueError(f"Invalid {ref_type} name: cannot be empty")
+
+        # Git ref name rules (simplified)
+        invalid_patterns = [
+            r'\.\.', # No double dots
+            r'^\.', # Cannot start with dot
+            r'\.$', # Cannot end with dot
+            r'^/', # Cannot start with slash
+            r'/$', # Cannot end with slash
+            r'//', # No double slashes
+            r'[\[\]^~:?*\\]', # No special chars
+            r'@\{', # No @{
+            r'\s', # No whitespace
+        ]
+
+        for pattern in invalid_patterns:
+            if re.search(pattern, name):
+                raise ValueError(
+                    f"Invalid {ref_type} name '{name}': contains invalid pattern"
+                )
+
+        # Check for control characters
+        if any(ord(c) < 32 or ord(c) == 127 for c in name):
+            raise ValueError(f"Invalid {ref_type} name: contains control characters")
+
+        logger.debug(f"Validated {ref_type} name: {name}")
 
     def init_repository(self, path: Optional[str] = None) -> Repo:
         """Initialize a new Git repository."""
@@ -141,17 +181,20 @@ class GitClient:
     def create_branch(self, branch_name: str, checkout: bool = True) -> None:
         """Create a new branch."""
         self._ensure_repo()
+        self._validate_ref_name(branch_name, "branch")
 
         try:
             new_branch = self.repo.create_head(branch_name)
             if checkout:
                 new_branch.checkout()
         except GitCommandError as e:
-            raise Exception(f"Failed to create branch: {str(e)}")
+            raise Exception(f"Failed to create branch: {str(e)}") from e
 
     def checkout(self, branch_name: str, create: bool = False) -> None:
         """Checkout a branch."""
         self._ensure_repo()
+        if create:
+            self._validate_ref_name(branch_name, "branch")
 
         try:
             if create:
@@ -159,7 +202,7 @@ class GitClient:
             else:
                 self.repo.heads[branch_name].checkout()
         except (GitCommandError, IndexError) as e:
-            raise Exception(f"Failed to checkout branch: {str(e)}")
+            raise Exception(f"Failed to checkout branch: {str(e)}") from e
 
     def delete_branch(self, branch_name: str, force: bool = False) -> None:
         """Delete a branch."""
@@ -324,6 +367,7 @@ class GitClient:
     def create_tag(self, tag_name: str, message: Optional[str] = None) -> None:
         """Create a tag."""
         self._ensure_repo()
+        self._validate_ref_name(tag_name, "tag")
 
         try:
             if message:
@@ -331,7 +375,7 @@ class GitClient:
             else:
                 self.repo.create_tag(tag_name)
         except GitCommandError as e:
-            raise Exception(f"Failed to create tag: {str(e)}")
+            raise Exception(f"Failed to create tag: {str(e)}") from e
 
     def delete_tag(self, tag_name: str) -> None:
         """Delete a tag."""

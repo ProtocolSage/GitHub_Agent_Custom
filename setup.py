@@ -13,10 +13,9 @@ setup(
         'anthropic>=0.39.0',
         'click>=8.1.7',
         'rich>=13.9.4',
-        'pydantic>=2.10.4',
         'python-dotenv>=1.0.1',
-        'PyYAML>=6.0.2',
         'requests>=2.32.3',
+        'PyYAML>=6.0.2',
     ],
     entry_points={
         'console_scripts': [
