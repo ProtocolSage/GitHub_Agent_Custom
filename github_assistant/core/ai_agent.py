@@ -1,24 +1,44 @@
 """AI agent for intelligent GitHub and Git operations using Claude."""
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from anthropic import Anthropic
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class AIAgent:
     """Claude-powered AI agent for code analysis and automation."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    # Maximum characters for diff to prevent huge API costs
+    MAX_DIFF_SIZE = 50000
+    MAX_PR_DIFF_SIZE = 100000
+
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         """Initialize AI agent with Anthropic API key."""
         self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
         if not self.api_key:
             raise ValueError("Anthropic API key required. Set ANTHROPIC_API_KEY env variable.")
 
         self.client = Anthropic(api_key=self.api_key)
-        self.model = "claude-3-5-sonnet-20241022"
+        self.model = model or os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022')
+        logger.debug(f"AIAgent initialized with model: {self.model}")
+
+    def _truncate_diff(self, diff: str, max_size: int) -> tuple[str, bool]:
+        """Truncate diff if too large, return (diff, was_truncated)."""
+        if len(diff) <= max_size:
+            return diff, False
+
+        logger.warning(f"Diff size {len(diff)} exceeds limit {max_size}, truncating")
+        truncated = diff[:max_size]
+        truncated += "\n\n... (diff truncated to prevent excessive API costs)"
+        return truncated, True
 
     def generate_commit_message(self, diff: str, context: Optional[str] = None) -> str:
         """Generate a commit message from git diff."""
+        diff, was_truncated = self._truncate_diff(diff, self.MAX_DIFF_SIZE)
+
         prompt = f"""Analyze this git diff and generate a concise, professional commit message.
 
 Follow conventional commit format: <type>: <description>
@@ -32,6 +52,7 @@ Rules:
 - Be specific and actionable
 
 {f"Context: {context}" if context else ""}
+{"Note: Diff was truncated due to size." if was_truncated else ""}
 
 Diff:
 ```
@@ -40,6 +61,7 @@ Diff:
 
 Generate the commit message:"""
 
+        logger.debug(f"Generating commit message for diff of length {len(diff)}")
         response = self.client.messages.create(
             model=self.model,
             max_tokens=500,
@@ -48,8 +70,10 @@ Generate the commit message:"""
 
         return response.content[0].text.strip()
 
-    def review_code_changes(self, diff: str, context: Optional[str] = None) -> Dict[str, any]:
+    def review_code_changes(self, diff: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Review code changes and provide feedback."""
+        diff, was_truncated = self._truncate_diff(diff, self.MAX_DIFF_SIZE)
+
         prompt = f"""Review this code diff and provide comprehensive feedback.
 
 Analyze:
@@ -60,6 +84,7 @@ Analyze:
 5. Suggestions for improvement
 
 {f"Context: {context}" if context else ""}
+{"Note: Diff was truncated due to size." if was_truncated else ""}
 
 Diff:
 ```
@@ -76,6 +101,7 @@ Provide your review in this JSON format:
     "recommendation": "approve/request_changes/comment"
 }}"""
 
+        logger.debug(f"Reviewing code changes, diff length: {len(diff)}")
         response = self.client.messages.create(
             model=self.model,
             max_tokens=2000,
@@ -84,9 +110,16 @@ Provide your review in this JSON format:
 
         # Parse the response
         import json
+        import re
         try:
             review_text = response.content[0].text
-            # Extract JSON from response
+            # Try to extract JSON from code block first
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', review_text, re.DOTALL)
+            if json_match:
+                review_data = json.loads(json_match.group(1))
+                return review_data
+
+            # Fallback: Extract JSON from response
             start = review_text.find('{')
             end = review_text.rfind('}') + 1
             if start >= 0 and end > start:
@@ -94,6 +127,7 @@ Provide your review in this JSON format:
                 return review_data
             else:
                 # Fallback if JSON not found
+                logger.warning("No JSON found in AI response, using raw text")
                 return {
                     "summary": review_text,
                     "issues": [],
@@ -103,6 +137,7 @@ Provide your review in this JSON format:
                     "recommendation": "comment"
                 }
         except Exception as e:
+            logger.error(f"Error parsing AI response: {e}")
             return {
                 "summary": response.content[0].text,
                 "issues": [],
@@ -119,13 +154,16 @@ Provide your review in this JSON format:
         pr_description: str,
         diff: str,
         files_changed: int
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """Review a complete pull request."""
+        diff, was_truncated = self._truncate_diff(diff, self.MAX_PR_DIFF_SIZE)
+
         prompt = f"""Review this pull request comprehensively.
 
 PR Title: {pr_title}
 Description: {pr_description}
 Files Changed: {files_changed}
+{"Note: Diff was truncated due to size." if was_truncated else ""}
 
 Diff:
 ```
@@ -232,11 +270,14 @@ Example: bug, high-priority, backend"""
         commits: List[str]
     ) -> str:
         """Generate a comprehensive PR description."""
+        diff, was_truncated = self._truncate_diff(diff, self.MAX_PR_DIFF_SIZE)
+
         prompt = f"""Generate a comprehensive pull request description.
 
 Branch: {branch_name}
 Commits:
 {chr(10).join(f'- {commit}' for commit in commits)}
+{"Note: Diff was truncated due to size." if was_truncated else ""}
 
 Changes:
 ```
@@ -270,7 +311,10 @@ Format the description as:
 
     def explain_diff(self, diff: str) -> str:
         """Explain what a diff does in plain English."""
+        diff, was_truncated = self._truncate_diff(diff, self.MAX_DIFF_SIZE)
+
         prompt = f"""Explain this git diff in plain English. What does it do?
+{"Note: Diff was truncated due to size." if was_truncated else ""}
 
 Diff:
 ```
@@ -279,6 +323,7 @@ Diff:
 
 Provide a clear, concise explanation suitable for a non-technical audience."""
 
+        logger.debug(f"Explaining diff of length {len(diff)}")
         response = self.client.messages.create(
             model=self.model,
             max_tokens=800,
@@ -310,7 +355,7 @@ Example: feature/add-user-authentication"""
 
         return response.content[0].text.strip()
 
-    def triage_issue(self, issue_title: str, issue_body: str) -> Dict[str, any]:
+    def triage_issue(self, issue_title: str, issue_body: str) -> Dict[str, Any]:
         """Triage an issue and suggest priority/assignment."""
         prompt = f"""Triage this GitHub issue and provide recommendations.
 

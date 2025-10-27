@@ -1,13 +1,17 @@
 """GitHub API client for repository and remote operations."""
 
 from typing import List, Optional, Dict, Any
-from github import Github, GithubException, Repository, PullRequest, Issue
+from github import Github, GithubException, Repository, PullRequest, Issue, RateLimitExceededException
 from github.GithubObject import NotSet
 import os
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubClient:
-    """Comprehensive GitHub API client."""
+    """Comprehensive GitHub API client with rate limit handling."""
 
     def __init__(self, token: Optional[str] = None):
         """Initialize GitHub client with token from env or parameter."""
@@ -17,6 +21,67 @@ class GitHubClient:
 
         self.client = Github(self.token)
         self.user = self.client.get_user()
+        logger.debug(f"GitHub client initialized for user: {self.user.login}")
+
+    def _handle_rate_limit(self, func, *args, **kwargs):
+        """
+        Execute function with rate limit handling.
+
+        Args:
+            func: Function to execute
+            *args: Function arguments
+            **kwargs: Function keyword arguments
+
+        Returns:
+            Function result
+
+        Raises:
+            Exception: If function fails after retry
+        """
+        max_retries = 3
+        retry_delay = 60  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except RateLimitExceededException:
+                if attempt < max_retries - 1:
+                    rate_limit = self.client.get_rate_limit()
+                    reset_time = rate_limit.core.reset
+                    wait_time = (reset_time - time.time()) + 5  # Add 5s buffer
+
+                    logger.warning(
+                        f"Rate limit exceeded. Waiting {wait_time:.0f}s until reset..."
+                    )
+                    time.sleep(min(wait_time, retry_delay))
+                else:
+                    logger.error("Rate limit exceeded, max retries reached")
+                    raise
+            except GithubException as e:
+                if e.status == 403 and 'rate limit' in str(e).lower():
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Rate limit hit, retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                    else:
+                        raise
+                else:
+                    raise
+
+    def get_rate_limit_status(self) -> Dict[str, Any]:
+        """Get current rate limit status."""
+        rate_limit = self.client.get_rate_limit()
+        return {
+            "core": {
+                "limit": rate_limit.core.limit,
+                "remaining": rate_limit.core.remaining,
+                "reset": rate_limit.core.reset.isoformat()
+            },
+            "search": {
+                "limit": rate_limit.search.limit,
+                "remaining": rate_limit.search.remaining,
+                "reset": rate_limit.search.reset.isoformat()
+            }
+        }
 
     # Repository Operations
 
