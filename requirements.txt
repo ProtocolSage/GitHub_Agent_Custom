@@ -1,0 +1,10 @@
+# Core Dependencies
+PyGithub==2.5.0          # GitHub API client
+GitPython==3.1.43        # Git operations
+anthropic==0.39.0        # Claude AI
+click==8.1.7             # CLI framework
+rich==13.9.4             # Beautiful terminal output
+pydantic==2.10.4         # Data validation
+python-dotenv==1.0.1     # Environment variables
+PyYAML==6.0.2            # Config files
+requests==2.32.3         # HTTP requests
